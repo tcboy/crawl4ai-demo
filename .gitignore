@@ -1,0 +1,24 @@
+# 登录态文件
+alipay_session.json
+
+# 爬取结果文件
+scrape_result.html
+*.html
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 虚拟环境
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
