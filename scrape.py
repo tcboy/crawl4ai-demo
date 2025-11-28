@@ -114,16 +114,10 @@ async def scrape_with_session(url: str, headless: bool = True, extract_schema: d
                 print(f"创建提取策略时出错: {e}")
                 print("将使用默认提取方式...")
         
-        # 使用 crawl4ai 爬取页面
-        print("正在加载页面并等待 JavaScript 执行...")
+        # 先获取 page 对象，然后手动访问页面并等待
+        print("正在访问页面并等待 JavaScript 执行...")
         
-        # 访问目标页面
-        result = await crawler.arun(
-            url=url,
-            extraction_strategy=extraction_strategy
-        )
-        
-        # 获取 page 对象并手动等待 JavaScript 执行完成
+        # 获取 page 对象
         page = None
         try:
             if hasattr(crawler, 'browser') and crawler.browser:
@@ -136,29 +130,144 @@ async def scrape_with_session(url: str, headless: bool = True, extract_schema: d
                             page = pages[-1]
                 elif hasattr(browser_obj, 'page') and browser_obj.page:
                     page = browser_obj.page
+                elif hasattr(browser_obj, '_browser'):
+                    browser = browser_obj._browser
+                    if hasattr(browser, 'contexts') and browser.contexts:
+                        contexts = browser.contexts
+                        if contexts and len(contexts) > 0:
+                            pages = contexts[0].pages
+                            if pages and len(pages) > 0:
+                                page = pages[-1]
         except Exception as e:
             print(f"获取 page 对象时出错: {e}")
         
-        # 等待 JavaScript 执行完成
-        if page:
-            print("等待 JavaScript 执行完成...")
+        # 如果获取不到 page，先访问一次以创建 page
+        if not page:
+            print("未找到 page 对象，先访问页面以创建...")
             try:
+                temp_result = await crawler.arun(url=base_url)
+                # 再次尝试获取
+                if hasattr(crawler, 'browser') and crawler.browser:
+                    browser_obj = crawler.browser
+                    if hasattr(browser_obj, 'contexts') and browser_obj.contexts:
+                        contexts = browser_obj.contexts
+                        if contexts and len(contexts) > 0:
+                            pages = contexts[0].pages
+                            if pages and len(pages) > 0:
+                                page = pages[-1]
+            except:
+                pass
+        
+        # 如果仍然没有 page，直接使用 crawl4ai 访问
+        if page:
+            print("找到 page 对象，直接使用 Playwright 访问页面...")
+            try:
+                # 直接使用 page 对象访问
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                print("✓ 页面已加载")
+                
                 # 等待网络空闲
+                print("等待网络请求完成...")
                 await page.wait_for_load_state("networkidle", timeout=20000)
                 print("✓ 网络请求已完成")
                 
                 # 额外等待，确保动态内容加载
-                await page.wait_for_timeout(3000)
-                print("✓ 动态内容加载完成")
+                print("等待动态内容加载（5秒）...")
+                await page.wait_for_timeout(5000)
                 
-                # 如果 HTML 为空，重新获取
-                if not result.html or len(result.html) < 100:
-                    print("重新获取页面内容...")
-                    html = await page.content()
-                    if html:
-                        result.html = html
+                # 等待页面有实际内容
+                print("检查页面内容...")
+                max_retries = 3
+                for i in range(max_retries):
+                    try:
+                        await page.wait_for_function(
+                            "() => document.body && document.body.innerText.trim().length > 0",
+                            timeout=5000
+                        )
+                        print(f"✓ 页面内容已加载（尝试 {i+1}/{max_retries}）")
+                        break
+                    except Exception as e:
+                        if i < max_retries - 1:
+                            print(f"等待内容加载中... ({i+1}/{max_retries})")
+                            await page.wait_for_timeout(2000)
+                        else:
+                            print(f"警告: 页面内容可能未完全加载: {e}")
+                
+                # 再次等待网络空闲
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=10000)
+                except:
+                    pass
+                
+                # 直接从 page 获取内容
+                print("正在获取页面内容...")
+                html = await page.content()
+                title = await page.title()
+                
+                # 获取 markdown（使用 crawl4ai 的转换功能，或手动处理）
+                markdown = None
+                try:
+                    # 尝试使用 crawl4ai 的 markdown 转换
+                    from crawl4ai import Markdownify
+                    markdownify = Markdownify()
+                    markdown = markdownify.markdownify(html)
+                except:
+                    # 如果失败，使用简单的文本提取
+                    try:
+                        markdown = await page.evaluate("() => document.body.innerText")
+                    except:
+                        pass
+                
+                # 创建模拟的 result 对象
+                class MockResult:
+                    def __init__(self):
+                        self.success = True
+                        self.html = html
+                        self.markdown = markdown
+                        self.metadata = {"title": title}
+                        self.extracted_content = None
+                        self.screenshot = None
+                
+                result = MockResult()
+                
             except Exception as e:
-                print(f"等待页面加载时出现警告: {e}")
+                print(f"使用 page 对象访问时出错: {e}")
+                print("回退到使用 crawl4ai 的 arun 方法...")
+                result = await crawler.arun(url=url, extraction_strategy=extraction_strategy)
+        else:
+            # 使用 crawl4ai 的 arun 方法
+            print("使用 crawl4ai 的 arun 方法访问页面...")
+            result = await crawler.arun(url=url, extraction_strategy=extraction_strategy)
+            
+            # 如果结果为空，尝试从 page 对象获取
+            if not result.html or len(result.html) < 100:
+                print("crawl4ai 返回的内容为空，尝试从 page 对象获取...")
+                # 再次尝试获取 page 对象
+                try:
+                    if hasattr(crawler, 'browser') and crawler.browser:
+                        browser_obj = crawler.browser
+                        if hasattr(browser_obj, 'contexts') and browser_obj.contexts:
+                            contexts = browser_obj.contexts
+                            if contexts and len(contexts) > 0:
+                                pages = contexts[0].pages
+                                if pages and len(pages) > 0:
+                                    page = pages[-1]
+                    
+                    if page:
+                        # 等待页面加载
+                        await page.wait_for_load_state("networkidle", timeout=15000)
+                        await page.wait_for_timeout(3000)
+                        # 获取内容
+                        html = await page.content()
+                        title = await page.title()
+                        result.html = html
+                        if hasattr(result, 'metadata'):
+                            result.metadata['title'] = title
+                        else:
+                            result.metadata = {"title": title}
+                        print(f"✓ 从 page 对象获取到内容，长度: {len(html)} 字符")
+                except Exception as e:
+                    print(f"从 page 对象获取内容时出错: {e}")
         
         if result.success:
             print("\n✓ 爬取成功！")
