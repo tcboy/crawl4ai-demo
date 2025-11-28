@@ -114,8 +114,8 @@ async def scrape_with_session(url: str, headless: bool = True, extract_schema: d
                 print(f"创建提取策略时出错: {e}")
                 print("将使用默认提取方式...")
         
-        # 先获取 page 对象，然后手动访问页面并等待
-        print("正在访问页面并等待 JavaScript 执行...")
+        # 优先使用 Playwright 直接获取完整内容
+        print("使用 Playwright 直接访问页面以获取完整内容...")
         
         # 获取 page 对象
         page = None
@@ -158,9 +158,13 @@ async def scrape_with_session(url: str, headless: bool = True, extract_schema: d
             except:
                 pass
         
-        # 如果仍然没有 page，直接使用 crawl4ai 访问
+        # 使用 Playwright 直接访问页面并获取完整内容
+        html = None
+        title = None
+        markdown = None
+        
         if page:
-            print("找到 page 对象，直接使用 Playwright 访问页面...")
+            print("找到 page 对象，使用 Playwright 访问页面...")
             try:
                 # 直接使用 page 对象访问
                 await page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -199,75 +203,91 @@ async def scrape_with_session(url: str, headless: bool = True, extract_schema: d
                 except:
                     pass
                 
-                # 直接从 page 获取内容
-                print("正在获取页面内容...")
+                # 直接从 page 获取完整内容
+                print("正在获取页面内容（使用 Playwright）...")
                 html = await page.content()
                 title = await page.title()
                 
-                # 获取 markdown（使用 crawl4ai 的转换功能，或手动处理）
-                markdown = None
+                # 获取 markdown（使用 crawl4ai 的转换功能）
                 try:
-                    # 尝试使用 crawl4ai 的 markdown 转换
                     from crawl4ai import Markdownify
                     markdownify = Markdownify()
                     markdown = markdownify.markdownify(html)
-                except:
-                    # 如果失败，使用简单的文本提取
+                    print("✓ 已转换为 Markdown")
+                except Exception as e:
+                    print(f"Markdown 转换失败: {e}，使用文本提取...")
                     try:
                         markdown = await page.evaluate("() => document.body.innerText")
                     except:
                         pass
                 
-                # 创建模拟的 result 对象
-                class MockResult:
-                    def __init__(self):
-                        self.success = True
-                        self.html = html
-                        self.markdown = markdown
-                        self.metadata = {"title": title}
-                        self.extracted_content = None
-                        self.screenshot = None
-                
-                result = MockResult()
+                print(f"✓ 获取到完整内容，HTML 长度: {len(html)} 字符")
                 
             except Exception as e:
-                print(f"使用 page 对象访问时出错: {e}")
-                print("回退到使用 crawl4ai 的 arun 方法...")
-                result = await crawler.arun(url=url, extraction_strategy=extraction_strategy)
-        else:
-            # 使用 crawl4ai 的 arun 方法
-            print("使用 crawl4ai 的 arun 方法访问页面...")
+                print(f"使用 Playwright 访问时出错: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # 如果 Playwright 获取失败，回退到 crawl4ai
+        extracted_data = None
+        if not html or len(html) < 100:
+            print("Playwright 获取内容失败，回退到使用 crawl4ai...")
             result = await crawler.arun(url=url, extraction_strategy=extraction_strategy)
-            
-            # 如果结果为空，尝试从 page 对象获取
-            if not result.html or len(result.html) < 100:
-                print("crawl4ai 返回的内容为空，尝试从 page 对象获取...")
-                # 再次尝试获取 page 对象
+            if result.success:
+                html = result.html if hasattr(result, 'html') else None
+                markdown = result.markdown if hasattr(result, 'markdown') else None
+                title = result.metadata.get('title', 'N/A') if hasattr(result, 'metadata') else 'N/A'
+                extracted_data = result.extracted_content if hasattr(result, 'extracted_content') else None
+            else:
+                # 创建失败的结果
+                class MockResult:
+                    def __init__(self):
+                        self.success = False
+                        self.error_message = result.error_message if hasattr(result, 'error_message') else "未知错误"
+                result = MockResult()
+        else:
+            # 使用 crawl4ai 对获取到的 HTML 进行结构化提取
+            if extract_schema and html:
+                print("使用 crawl4ai 对内容进行结构化整理...")
                 try:
-                    if hasattr(crawler, 'browser') and crawler.browser:
-                        browser_obj = crawler.browser
-                        if hasattr(browser_obj, 'contexts') and browser_obj.contexts:
-                            contexts = browser_obj.contexts
-                            if contexts and len(contexts) > 0:
-                                pages = contexts[0].pages
-                                if pages and len(pages) > 0:
-                                    page = pages[-1]
-                    
-                    if page:
-                        # 等待页面加载
-                        await page.wait_for_load_state("networkidle", timeout=15000)
-                        await page.wait_for_timeout(3000)
-                        # 获取内容
-                        html = await page.content()
-                        title = await page.title()
-                        result.html = html
-                        if hasattr(result, 'metadata'):
-                            result.metadata['title'] = title
+                    # 使用 crawl4ai 的提取策略处理 HTML
+                    if extraction_strategy:
+                        # 创建一个临时的 result 对象用于提取
+                        from crawl4ai.models import CrawlResult
+                        temp_result = CrawlResult(
+                            url=url,
+                            html=html,
+                            markdown=markdown,
+                            metadata={"title": title} if title else {}
+                        )
+                        
+                        # 执行提取
+                        extracted_data = await extraction_strategy.extract(temp_result)
+                        if extracted_data:
+                            print("✓ 结构化数据提取成功")
                         else:
-                            result.metadata = {"title": title}
-                        print(f"✓ 从 page 对象获取到内容，长度: {len(html)} 字符")
+                            extracted_data = None
+                    else:
+                        extracted_data = None
                 except Exception as e:
-                    print(f"从 page 对象获取内容时出错: {e}")
+                    print(f"结构化提取时出错: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    extracted_data = None
+            else:
+                extracted_data = None
+            
+            # 创建 result 对象
+            class MockResult:
+                def __init__(self):
+                    self.success = True
+                    self.html = html
+                    self.markdown = markdown
+                    self.metadata = {"title": title} if title else {}
+                    self.extracted_content = extracted_data
+                    self.screenshot = None
+            
+            result = MockResult()
         
         if result.success:
             print("\n✓ 爬取成功！")
@@ -279,9 +299,7 @@ async def scrape_with_session(url: str, headless: bool = True, extract_schema: d
             
             # 获取结构化数据（如果使用了提取策略）
             extracted_data = None
-            if extraction_strategy and hasattr(result, 'extracted_content'):
-                extracted_data = result.extracted_content
-            elif hasattr(result, 'extracted_content'):
+            if hasattr(result, 'extracted_content'):
                 extracted_data = result.extracted_content
             
             content_length = len(html or markdown or "")
