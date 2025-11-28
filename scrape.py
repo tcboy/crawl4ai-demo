@@ -92,31 +92,122 @@ async def scrape_with_session(url: str, headless: bool = True):
         # 使用 crawl4ai 爬取页面，配置等待 JavaScript 执行
         print("正在加载页面...")
         
-        # 先访问页面
-        result = await crawler.arun(url=url)
-        
-        # 获取 page 对象并手动等待 JavaScript 执行完成
-        print("等待 JavaScript 执行完成...")
+        # 获取 page 对象 - 在访问页面之前获取
         page = None
+        
+        # 调试：打印 crawler 对象的结构
+        print("调试信息：检查 crawler 对象结构...")
+        try:
+            print(f"crawler 类型: {type(crawler)}")
+            print(f"crawler 属性: {[attr for attr in dir(crawler) if not attr.startswith('__')]}")
+            if hasattr(crawler, 'browser'):
+                print(f"crawler.browser 类型: {type(crawler.browser)}")
+                print(f"crawler.browser 属性: {[attr for attr in dir(crawler.browser) if not attr.startswith('__')]}")
+        except Exception as e:
+            print(f"调试信息获取失败: {e}")
         
         # 尝试多种方式获取 page 对象
         try:
+            # 方式1: 通过 browser 属性
             if hasattr(crawler, 'browser') and crawler.browser:
-                if hasattr(crawler.browser, 'page') and crawler.browser.page:
-                    page = crawler.browser.page
-                elif hasattr(crawler.browser, 'contexts') and crawler.browser.contexts:
-                    contexts = crawler.browser.contexts
-                    if contexts:
+                browser_obj = crawler.browser
+                
+                # 尝试不同的属性路径
+                if hasattr(browser_obj, 'page') and browser_obj.page:
+                    page = browser_obj.page
+                elif hasattr(browser_obj, 'contexts') and browser_obj.contexts:
+                    contexts = browser_obj.contexts
+                    if contexts and len(contexts) > 0:
+                        context = contexts[0]
+                        if hasattr(context, 'pages'):
+                            pages = context.pages
+                            if pages and len(pages) > 0:
+                                page = pages[-1]
+                elif hasattr(browser_obj, 'context'):
+                    context = browser_obj.context
+                    if hasattr(context, 'pages'):
+                        pages = context.pages
+                        if pages and len(pages) > 0:
+                            page = pages[-1]
+                
+                # 如果还没有，尝试通过 browser 的 _browser 属性（内部实现）
+                if not page and hasattr(browser_obj, '_browser'):
+                    browser = browser_obj._browser
+                    if hasattr(browser, 'contexts'):
+                        contexts = browser.contexts
+                        if contexts and len(contexts) > 0:
+                            pages = contexts[0].pages
+                            if pages and len(pages) > 0:
+                                page = pages[-1]
+            
+            # 方式2: 通过 _browser 属性（如果存在）
+            if not page and hasattr(crawler, '_browser'):
+                browser = crawler._browser
+                if hasattr(browser, 'contexts'):
+                    contexts = browser.contexts
+                    if contexts and len(contexts) > 0:
                         pages = contexts[0].pages
-                        if pages:
-                            page = pages[-1]  # 获取最后一个页面
-                elif hasattr(crawler.browser, 'context'):
-                    pages = crawler.browser.context.pages
-                    if pages:
-                        page = pages[-1]
+                        if pages and len(pages) > 0:
+                            page = pages[-1]
+            
+            # 方式3: 先访问一个页面来初始化 browser
+            if not page:
+                print("尝试初始化 browser 以获取 page 对象...")
+                temp_result = await crawler.arun(url=base_url)
+                # 再次尝试获取
+                if hasattr(crawler, 'browser') and crawler.browser:
+                    browser_obj = crawler.browser
+                    if hasattr(browser_obj, 'contexts') and browser_obj.contexts:
+                        contexts = browser_obj.contexts
+                        if contexts and len(contexts) > 0:
+                            pages = contexts[0].pages
+                            if pages and len(pages) > 0:
+                                page = pages[-1]
+                
         except Exception as e:
             print(f"获取 page 对象时出错: {e}")
+            import traceback
+            traceback.print_exc()
         
+        # 访问目标页面
+        print("正在访问目标页面...")
+        result = await crawler.arun(url=url)
+        
+        # 再次尝试获取 page 对象（访问后可能更容易获取）
+        if not page:
+            print("访问后再次尝试获取 page 对象...")
+            try:
+                if hasattr(crawler, 'browser') and crawler.browser:
+                    browser_obj = crawler.browser
+                    print(f"找到 browser 对象，类型: {type(browser_obj)}")
+                    
+                    # 尝试所有可能的属性
+                    if hasattr(browser_obj, 'contexts') and browser_obj.contexts:
+                        contexts = browser_obj.contexts
+                        print(f"找到 contexts，数量: {len(contexts)}")
+                        if contexts and len(contexts) > 0:
+                            pages = contexts[0].pages
+                            print(f"找到 pages，数量: {len(pages) if pages else 0}")
+                            if pages and len(pages) > 0:
+                                page = pages[-1]
+                                print(f"✓ 成功获取 page 对象")
+                    elif hasattr(browser_obj, 'page') and browser_obj.page:
+                        page = browser_obj.page
+                        print(f"✓ 通过 browser.page 获取到 page 对象")
+                    elif hasattr(browser_obj, 'context'):
+                        context = browser_obj.context
+                        if hasattr(context, 'pages'):
+                            pages = context.pages
+                            if pages and len(pages) > 0:
+                                page = pages[-1]
+                                print(f"✓ 通过 browser.context.pages 获取到 page 对象")
+            except Exception as e:
+                print(f"访问后获取 page 对象时出错: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # 等待 JavaScript 执行完成
+        print("等待 JavaScript 执行完成...")
         if page:
             print("找到 page 对象，开始等待页面完全加载...")
             try:
@@ -167,7 +258,8 @@ async def scrape_with_session(url: str, headless: bool = True):
                     pass
         else:
             print("警告: 无法获取 page 对象，使用默认等待时间...")
-            await asyncio.sleep(5)  # 至少等待 5 秒
+            print("等待 10 秒以确保 JavaScript 执行完成...")
+            await asyncio.sleep(10)  # 增加等待时间
         
         if result.success:
             print("\n✓ 爬取成功！")
@@ -179,7 +271,22 @@ async def scrape_with_session(url: str, headless: bool = True):
             
             # 如果 HTML 为空或过短，从 page 对象重新获取
             if not html or len(html) < 100:
-                print("警告: HTML 内容为空或过短，从 page 对象重新获取...")
+                print("警告: HTML 内容为空或过短，尝试从 page 对象获取...")
+                
+                # 再次尝试获取 page 对象
+                if not page:
+                    try:
+                        if hasattr(crawler, 'browser') and crawler.browser:
+                            browser_obj = crawler.browser
+                            if hasattr(browser_obj, 'contexts') and browser_obj.contexts:
+                                contexts = browser_obj.contexts
+                                if contexts and len(contexts) > 0:
+                                    pages = contexts[0].pages
+                                    if pages and len(pages) > 0:
+                                        page = pages[-1]
+                    except Exception as e:
+                        print(f"重新获取 page 对象时出错: {e}")
+                
                 if page:
                     try:
                         html = await page.content()
@@ -188,7 +295,16 @@ async def scrape_with_session(url: str, headless: bool = True):
                     except Exception as e:
                         print(f"从 page 对象获取内容时出错: {e}")
                 else:
-                    print("无法获取 page 对象，内容可能未完全加载")
+                    print("无法获取 page 对象，尝试其他方式...")
+                    # 尝试通过 result 对象获取
+                    if hasattr(result, 'page') and result.page:
+                        try:
+                            page = result.page
+                            html = await page.content()
+                            title = await page.title()
+                            print(f"✓ 从 result.page 获取到内容，长度: {len(html)} 字符")
+                        except Exception as e:
+                            print(f"从 result.page 获取内容时出错: {e}")
             
             # 如果仍然为空，尝试获取渲染后的 HTML
             if not html or len(html) < 100:
@@ -200,6 +316,12 @@ async def scrape_with_session(url: str, headless: bool = True):
                         print(f"✓ 获取到渲染后的 HTML，长度: {len(html)} 字符")
                     except Exception as e:
                         print(f"获取渲染后 HTML 时出错: {e}")
+                elif hasattr(result, 'page') and result.page:
+                    try:
+                        html = await result.page.evaluate("() => document.documentElement.outerHTML")
+                        print(f"✓ 从 result.page 获取到渲染后的 HTML，长度: {len(html)} 字符")
+                    except Exception as e:
+                        print(f"从 result.page 获取渲染后 HTML 时出错: {e}")
             
             content_length = len(html or markdown or "")
             print(f"✓ 页面标题: {title}")
