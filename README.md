@@ -1,6 +1,6 @@
-# Crawl4AI 支付宝登录爬取示例
+# 支付宝登录爬取示例
 
-本项目使用 crawl4ai 实现支付宝登录态保存和后续页面爬取功能。
+本项目使用 Playwright 和 Firecrawl 实现支付宝登录态保存和后续页面爬取功能。
 
 ## 功能说明
 
@@ -52,10 +52,19 @@ python scrape.py
 
 ## 文件说明
 
-- `login.py`: 登录脚本，用于保存登录态
-- `scrape.py`: 爬取脚本，使用保存的登录态进行爬取
+- `login.py`: 登录脚本，用于保存登录态（使用 Playwright）
+- `scrape.py`: 爬取脚本，使用保存的登录态进行爬取（使用 Playwright，支持 Firecrawl）
 - `alipay_session.json`: 保存的登录态文件（自动生成）
 - `requirements.txt`: Python 依赖包列表
+
+## 技术说明
+
+- **登录脚本**: 使用 Playwright 直接控制浏览器，确保浏览器窗口正常打开
+- **爬取脚本**: 使用 Playwright 直接控制浏览器，确保：
+  - Cookies 正确设置
+  - JavaScript 完全执行
+  - 动态内容完全加载
+  - 网络请求全部完成
 
 ## 注意事项
 
