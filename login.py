@@ -5,7 +5,6 @@ import asyncio
 import json
 from pathlib import Path
 from crawl4ai import AsyncWebCrawler
-from crawl4ai.models import CrawlerRunConfig
 
 # 登录态存储文件路径
 SESSION_FILE = Path("alipay_session.json")
@@ -26,15 +25,9 @@ async def login_and_save_session():
     print("登录完成后，请在此终端按 Enter 键继续...")
     print("=" * 60)
     
-    async with AsyncWebCrawler(verbose=True) as crawler:
+    async with AsyncWebCrawler(verbose=True, headless=False) as crawler:
         # 访问登录页面，使用非无头模式
-        result = await crawler.arun(
-            url=url,
-            config=CrawlerRunConfig(
-                headless=False,  # 显示浏览器窗口
-                wait_for_images=True,
-            )
-        )
+        result = await crawler.arun(url=url)
         
         # 等待用户输入确认登录完成
         input("\n登录完成后，请按 Enter 键继续保存登录态...")

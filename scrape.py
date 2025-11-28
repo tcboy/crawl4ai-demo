@@ -5,7 +5,6 @@ import asyncio
 import json
 from pathlib import Path
 from crawl4ai import AsyncWebCrawler
-from crawl4ai.models import CrawlerRunConfig
 
 # 登录态存储文件路径
 SESSION_FILE = Path("alipay_session.json")
@@ -46,7 +45,7 @@ async def scrape_with_session(url: str, headless: bool = True):
     print(f"✓ 已加载 {len(cookies)} 个 cookies")
     
     # 创建爬虫实例
-    async with AsyncWebCrawler(verbose=True) as crawler:
+    async with AsyncWebCrawler(verbose=True, headless=headless) as crawler:
         # 先访问一个页面以初始化 browser context，然后设置 cookies
         # 获取 cookies 的域名信息
         cookie_domain = None
@@ -61,13 +60,7 @@ async def scrape_with_session(url: str, headless: bool = True):
             # 先访问目标域名的主页以建立 context
             if cookie_domain:
                 base_url = f"{parsed_url.scheme}://{cookie_domain}"
-                await crawler.arun(
-                    url=base_url,
-                    config=CrawlerRunConfig(
-                        headless=headless,
-                        wait_for_images=False,
-                    )
-                )
+                await crawler.arun(url=base_url)
             
             # 设置 cookies
             if hasattr(crawler, 'browser') and crawler.browser:
@@ -90,13 +83,7 @@ async def scrape_with_session(url: str, headless: bool = True):
         print("=" * 60)
         
         # 爬取页面
-        result = await crawler.arun(
-            url=url,
-            config=CrawlerRunConfig(
-                headless=headless,
-                wait_for_images=True,
-            )
-        )
+        result = await crawler.arun(url=url)
         
         if result.success:
             print("\n✓ 爬取成功！")
