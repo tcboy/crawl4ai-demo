@@ -90,37 +90,84 @@ async def scrape_with_session(url: str, headless: bool = True):
             print("继续尝试爬取...")
         
         # 使用 crawl4ai 爬取页面，配置等待 JavaScript 执行
-        print("正在加载页面并等待 JavaScript 执行...")
+        print("正在加载页面...")
         
-        # 尝试使用 crawl4ai 的配置选项
+        # 先访问页面
+        result = await crawler.arun(url=url)
+        
+        # 获取 page 对象并手动等待 JavaScript 执行完成
+        print("等待 JavaScript 执行完成...")
+        page = None
+        
+        # 尝试多种方式获取 page 对象
         try:
-            # 方式1: 尝试传递配置参数
-            result = await crawler.arun(
-                url=url,
-                wait_for="networkidle",  # 等待网络空闲
-                delay_before_return_html=3.0,  # 额外等待 3 秒
-            )
-        except TypeError:
+            if hasattr(crawler, 'browser') and crawler.browser:
+                if hasattr(crawler.browser, 'page') and crawler.browser.page:
+                    page = crawler.browser.page
+                elif hasattr(crawler.browser, 'contexts') and crawler.browser.contexts:
+                    contexts = crawler.browser.contexts
+                    if contexts:
+                        pages = contexts[0].pages
+                        if pages:
+                            page = pages[-1]  # 获取最后一个页面
+                elif hasattr(crawler.browser, 'context'):
+                    pages = crawler.browser.context.pages
+                    if pages:
+                        page = pages[-1]
+        except Exception as e:
+            print(f"获取 page 对象时出错: {e}")
+        
+        if page:
+            print("找到 page 对象，开始等待页面完全加载...")
             try:
-                # 方式2: 使用 config 参数
-                result = await crawler.arun(
-                    url=url,
-                    config={
-                        "wait_for": "networkidle",
-                        "delay_before_return_html": 3.0,
-                    }
-                )
-            except TypeError:
-                # 方式3: 直接调用，然后手动等待
-                result = await crawler.arun(url=url)
+                # 等待 DOM 加载
+                await page.wait_for_load_state("domcontentloaded", timeout=10000)
+                print("✓ DOM 内容已加载")
                 
-                # 如果结果有 page 对象，手动等待
-                if hasattr(result, 'page') and result.page:
+                # 等待网络空闲（确保 AJAX 请求完成）
+                await page.wait_for_load_state("networkidle", timeout=20000)
+                print("✓ 网络请求已完成")
+                
+                # 额外等待，确保动态内容加载
+                print("等待动态内容加载（5秒）...")
+                await page.wait_for_timeout(5000)
+                
+                # 等待页面有实际内容
+                print("检查页面内容...")
+                max_retries = 3
+                for i in range(max_retries):
                     try:
-                        await result.page.wait_for_load_state("networkidle", timeout=15000)
-                        await result.page.wait_for_timeout(3000)
-                    except:
-                        pass
+                        # 等待 body 有内容
+                        await page.wait_for_function(
+                            "() => document.body && document.body.innerText.trim().length > 0",
+                            timeout=5000
+                        )
+                        print(f"✓ 页面内容已加载（尝试 {i+1}/{max_retries}）")
+                        break
+                    except Exception as e:
+                        if i < max_retries - 1:
+                            print(f"等待内容加载中... ({i+1}/{max_retries})")
+                            await page.wait_for_timeout(2000)
+                        else:
+                            print(f"警告: 页面内容可能未完全加载: {e}")
+                
+                # 再次等待网络空闲，确保所有异步请求完成
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=10000)
+                except:
+                    pass
+                
+            except Exception as e:
+                print(f"等待页面加载时出现错误: {e}")
+                # 即使出错也继续，至少等待基本加载
+                try:
+                    await page.wait_for_load_state("domcontentloaded", timeout=5000)
+                    await page.wait_for_timeout(3000)
+                except:
+                    pass
+        else:
+            print("警告: 无法获取 page 对象，使用默认等待时间...")
+            await asyncio.sleep(5)  # 至少等待 5 秒
         
         if result.success:
             print("\n✓ 爬取成功！")
@@ -130,27 +177,29 @@ async def scrape_with_session(url: str, headless: bool = True):
             markdown = result.markdown if hasattr(result, 'markdown') else None
             title = result.metadata.get('title', 'N/A') if hasattr(result, 'metadata') else 'N/A'
             
-            # 如果 HTML 为空，尝试从 page 对象获取
+            # 如果 HTML 为空或过短，从 page 对象重新获取
             if not html or len(html) < 100:
-                print("警告: HTML 内容为空或过短，尝试从 page 对象获取...")
-                try:
-                    if hasattr(crawler, 'browser') and crawler.browser:
-                        page = None
-                        if hasattr(crawler.browser, 'page') and crawler.browser.page:
-                            page = crawler.browser.page
-                        elif hasattr(crawler.browser, 'contexts') and crawler.browser.contexts:
-                            pages = crawler.browser.contexts[0].pages
-                            if pages:
-                                page = pages[-1]
-                        
-                        if page:
-                            # 等待页面加载完成
-                            await page.wait_for_load_state("networkidle", timeout=10000)
-                            await page.wait_for_timeout(3000)
-                            html = await page.content()
-                            title = await page.title()
-                except Exception as e:
-                    print(f"从 page 对象获取内容时出错: {e}")
+                print("警告: HTML 内容为空或过短，从 page 对象重新获取...")
+                if page:
+                    try:
+                        html = await page.content()
+                        title = await page.title()
+                        print(f"✓ 从 page 对象获取到内容，长度: {len(html)} 字符")
+                    except Exception as e:
+                        print(f"从 page 对象获取内容时出错: {e}")
+                else:
+                    print("无法获取 page 对象，内容可能未完全加载")
+            
+            # 如果仍然为空，尝试获取渲染后的 HTML
+            if not html or len(html) < 100:
+                print("尝试获取渲染后的 HTML...")
+                if page:
+                    try:
+                        # 获取渲染后的完整 HTML（包括 JavaScript 生成的内容）
+                        html = await page.evaluate("() => document.documentElement.outerHTML")
+                        print(f"✓ 获取到渲染后的 HTML，长度: {len(html)} 字符")
+                    except Exception as e:
+                        print(f"获取渲染后 HTML 时出错: {e}")
             
             content_length = len(html or markdown or "")
             print(f"✓ 页面标题: {title}")
