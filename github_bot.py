@@ -12,6 +12,10 @@ from playwright.async_api import async_playwright
 from typing import Dict, List, Optional
 import json
 
+# 超时时间配置（毫秒）
+PAGE_LOAD_TIMEOUT = 120000  # 120秒
+SELECTOR_TIMEOUT = 10000    # 10秒
+
 
 class GitHubBot:
     def __init__(self, proxy: Optional[str] = None):
@@ -24,6 +28,28 @@ class GitHubBot:
         self.proxy = proxy
         self.browser = None
         self.page = None
+    
+    async def goto_with_retry(self, url: str, wait_until: str = "networkidle"):
+        """
+        带重试机制的页面加载方法
+        
+        Args:
+            url: 要访问的URL
+            wait_until: 等待条件，默认为 networkidle
+        """
+        wait_options = ["networkidle", "load", "domcontentloaded"]
+        start_index = wait_options.index(wait_until) if wait_until in wait_options else 0
+        
+        for wait_type in wait_options[start_index:]:
+            try:
+                await self.page.goto(url, wait_until=wait_type, timeout=PAGE_LOAD_TIMEOUT)
+                return
+            except Exception as e:
+                if wait_type == wait_options[-1]:
+                    # 最后一个选项也失败了，抛出异常
+                    raise e
+                # 尝试下一个选项
+                continue
         
     async def start_browser(self):
         """启动浏览器并等待用户登录"""
@@ -48,7 +74,8 @@ class GitHubBot:
         
         # 访问GitHub登录页面
         print("正在打开GitHub登录页面...")
-        await self.page.goto("https://github.com/login", wait_until="networkidle")
+        print(f"超时时间设置为: {PAGE_LOAD_TIMEOUT/1000}秒")
+        await self.goto_with_retry("https://github.com/login", wait_until="networkidle")
         
         # 等待用户手动登录
         print("\n" + "="*60)
@@ -59,7 +86,7 @@ class GitHubBot:
         
         # 验证是否已登录（检查是否有用户头像或用户名）
         try:
-            await self.page.wait_for_selector('img[alt*="@"], [data-test-selector="user-nav"]', timeout=5000)
+            await self.page.wait_for_selector('img[alt*="@"], [data-test-selector="user-nav"]', timeout=SELECTOR_TIMEOUT)
             print("✓ 检测到已登录状态")
         except:
             print("⚠ 警告: 可能未检测到登录状态，继续执行...")
@@ -83,7 +110,7 @@ class GitHubBot:
         
         # 访问URL判断
         url = f"https://github.com/{input_str}"
-        await self.page.goto(url, wait_until="networkidle")
+        await self.goto_with_retry(url, wait_until="networkidle")
         await asyncio.sleep(1)
         
         # 检查页面元素判断类型
@@ -136,7 +163,7 @@ class GitHubBot:
         """
         print(f"\n正在获取用户 {username} 的信息...")
         url = f"https://github.com/{username}"
-        await self.page.goto(url, wait_until="networkidle")
+        await self.goto_with_retry(url, wait_until="networkidle")
         
         info = {
             "username": username,
@@ -175,7 +202,7 @@ class GitHubBot:
         try:
             # 访问用户的仓库页面
             repos_url = f"https://github.com/{username}?tab=repositories"
-            await self.page.goto(repos_url, wait_until="networkidle")
+            await self.goto_with_retry(repos_url, wait_until="networkidle")
             await asyncio.sleep(2)  # 等待页面完全加载
             
             # 等待仓库列表加载，尝试多种选择器
@@ -187,7 +214,7 @@ class GitHubBot:
             repo_elements = []
             for selector in selectors:
                 try:
-                    await self.page.wait_for_selector(selector, timeout=3000)
+                    await self.page.wait_for_selector(selector, timeout=SELECTOR_TIMEOUT)
                     repo_elements = await self.page.query_selector_all(selector)
                     if repo_elements:
                         break
@@ -246,7 +273,7 @@ class GitHubBot:
         try:
             # 访问用户的贡献页面或活动页面
             activity_url = f"https://github.com/{username}"
-            await self.page.goto(activity_url, wait_until="networkidle")
+            await self.goto_with_retry(activity_url, wait_until="networkidle")
             
             # 尝试获取活动feed中的提交记录
             commit_elements = await self.page.query_selector_all('div[class*="TimelineItem"]')
@@ -281,7 +308,7 @@ class GitHubBot:
         """
         print(f"\n正在获取项目 {project_name} 的信息...")
         url = f"https://github.com/{project_name}"
-        await self.page.goto(url, wait_until="networkidle")
+        await self.goto_with_retry(url, wait_until="networkidle")
         
         info = {
             "project": project_name,
@@ -318,7 +345,7 @@ class GitHubBot:
         # 获取README内容
         try:
             # 先访问项目主页
-            await self.page.goto(url, wait_until="networkidle")
+            await self.goto_with_retry(url, wait_until="networkidle")
             await asyncio.sleep(2)
             
             # 尝试多种README选择器
@@ -349,7 +376,7 @@ class GitHubBot:
         # 获取最近的提交记录
         try:
             commits_url = f"https://github.com/{project_name}/commits"
-            await self.page.goto(commits_url, wait_until="networkidle")
+            await self.goto_with_retry(commits_url, wait_until="networkidle")
             await asyncio.sleep(2)
             
             # 等待提交列表加载，尝试多种选择器
@@ -364,7 +391,7 @@ class GitHubBot:
             commit_elements = []
             for selector in commit_selectors:
                 try:
-                    await self.page.wait_for_selector(selector, timeout=3000)
+                    await self.page.wait_for_selector(selector, timeout=SELECTOR_TIMEOUT)
                     commit_elements = await self.page.query_selector_all(selector)
                     if commit_elements:
                         break
@@ -410,7 +437,7 @@ class GitHubBot:
         # 获取贡献者列表
         try:
             contributors_url = f"https://github.com/{project_name}/graphs/contributors"
-            await self.page.goto(contributors_url, wait_until="networkidle")
+            await self.goto_with_retry(contributors_url, wait_until="networkidle")
             
             await asyncio.sleep(2)
             
