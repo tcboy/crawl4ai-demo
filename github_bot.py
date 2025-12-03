@@ -40,14 +40,33 @@ class GitHubBot:
         wait_options = ["networkidle", "load", "domcontentloaded"]
         start_index = wait_options.index(wait_until) if wait_until in wait_options else 0
         
-        for wait_type in wait_options[start_index:]:
+        # 使用较短的超时时间，快速降级
+        timeouts = [30000, 60000, PAGE_LOAD_TIMEOUT]  # 30秒, 60秒, 120秒
+        
+        for i, wait_type in enumerate(wait_options[start_index:]):
+            timeout = timeouts[min(i, len(timeouts)-1)]
             try:
-                await self.page.goto(url, wait_until=wait_type, timeout=PAGE_LOAD_TIMEOUT)
+                print(f"  尝试加载页面 (等待条件: {wait_type}, 超时: {timeout/1000}秒)...")
+                await self.page.goto(url, wait_until=wait_type, timeout=timeout)
+                print(f"  ✓ 页面加载成功 ({wait_type})")
                 return
             except Exception as e:
+                error_msg = str(e)
+                if "timeout" in error_msg.lower():
+                    print(f"  ⚠ {wait_type} 超时，尝试下一个策略...")
+                else:
+                    print(f"  ⚠ {wait_type} 失败: {error_msg[:100]}")
+                
                 if wait_type == wait_options[-1]:
-                    # 最后一个选项也失败了，抛出异常
-                    raise e
+                    # 最后一个选项也失败了，尝试使用最短等待
+                    print("  尝试使用最短等待时间...")
+                    try:
+                        await self.page.goto(url, wait_until="commit", timeout=10000)
+                        print("  ✓ 页面已加载（使用最短等待）")
+                        return
+                    except:
+                        # 如果还是失败，抛出原始异常
+                        raise e
                 # 尝试下一个选项
                 continue
         
@@ -143,13 +162,31 @@ class GitHubBot:
                 print("根据格式判断为项目（包含斜杠）")
                 return 'project'
         
-        # 访问URL判断
+        # 访问URL判断 - 使用更快的加载策略
         url = f"https://github.com/{input_str}"
+        page_loaded = False
         try:
-            await self.goto_with_retry(url, wait_until="networkidle")
-            await asyncio.sleep(2)  # 等待页面完全加载
+            print(f"正在访问页面...")
+            # 先尝试快速加载（domcontentloaded）
+            try:
+                await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                print("  ✓ 页面DOM已加载")
+                page_loaded = True
+            except Exception as e1:
+                print(f"  ⚠ DOM加载超时，尝试其他方式...")
+                # 如果失败，尝试使用goto_with_retry
+                try:
+                    await self.goto_with_retry(url, wait_until="load")
+                    page_loaded = True
+                except Exception as e2:
+                    print(f"  ⚠ 页面加载失败: {e2}")
+            
+            if page_loaded:
+                print("等待页面内容渲染...")
+                await asyncio.sleep(3)  # 等待页面内容渲染
         except Exception as e:
-            print(f"访问页面时出错: {e}，将尝试根据URL格式判断")
+            print(f"⚠ 访问页面时出错: {e}")
+            print("将尝试根据URL格式判断类型")
             # 如果访问失败，根据格式判断
             if '/' in input_str:
                 return 'project'
@@ -165,6 +202,7 @@ class GitHubBot:
             'div[class*="repository"]',
             'span[itemprop="name"]',  # 项目名称
             'a[data-tab-item="code"]',  # Code标签
+            'a[href*="/blob"]',  # 代码链接
         ]
         
         user_indicators = [
@@ -172,6 +210,7 @@ class GitHubBot:
             'div[class*="user-profile"]',
             'img[alt*="@"]',  # 用户头像
             'a[data-tab-item="overview"]',  # Overview标签
+            'div[class*="pinned-item"]',  # 用户页面的置顶项目
         ]
         
         # 先检查是否是项目页面
@@ -180,7 +219,7 @@ class GitHubBot:
             try:
                 element = await self.page.query_selector(selector)
                 if element:
-                    print("检测到项目页面特征")
+                    print(f"  ✓ 检测到项目页面特征: {selector[:50]}...")
                     return 'project'
             except:
                 continue
@@ -190,10 +229,19 @@ class GitHubBot:
             try:
                 element = await self.page.query_selector(selector)
                 if element:
-                    print("检测到用户页面特征")
+                    print(f"  ✓ 检测到用户页面特征: {selector[:50]}...")
                     return 'user'
             except:
                 continue
+        
+        # 如果都没检测到，检查URL或页面标题
+        try:
+            title = await self.page.title()
+            print(f"页面标题: {title}")
+            if "repositories" in title.lower() or "profile" in title.lower():
+                return 'user'
+        except:
+            pass
         
         # 如果都没检测到，根据URL格式判断
         print("未检测到明确的页面特征，根据输入格式判断")
