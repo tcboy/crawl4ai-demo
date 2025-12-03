@@ -17,14 +17,16 @@ from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 class ScholarScraper:
     """Google Scholar 搜索爬虫类"""
     
-    def __init__(self, proxy: Optional[str] = None):
+    def __init__(self, proxy: Optional[str] = None, headless: bool = False):
         """
         初始化爬虫
         
         Args:
             proxy: socks5代理地址，格式: socks5://host:port
+            headless: 是否使用无头模式（False表示显示浏览器窗口）
         """
         self.proxy = proxy
+        self.headless = headless
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
@@ -35,9 +37,14 @@ class ScholarScraper:
         
         # 配置浏览器选项
         launch_options = {
-            "headless": True,
+            "headless": self.headless,
             "args": ["--no-sandbox", "--disable-setuid-sandbox"]
         }
+        
+        # 如果不是无头模式，添加一些额外的窗口选项
+        if not self.headless:
+            launch_options["slow_mo"] = 500  # 减慢操作速度，方便观察
+            print("浏览器窗口将显示，方便调试...")
         
         self.browser = await playwright.chromium.launch(**launch_options)
         
@@ -331,10 +338,11 @@ async def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例用法:
-  python scholar_scraper.py "John Smith"
+  python scholar_scraper.py "John Smith"  # 默认显示浏览器窗口
   python scholar_scraper.py "John Smith" --proxy socks5://127.0.0.1:1080
+  python scholar_scraper.py "John Smith" --headless  # 无头模式（不显示窗口）
+  python scholar_scraper.py "John Smith" --debug  # 启用调试模式（保存截图）
   python scholar_scraper.py "John Smith" --proxy socks5://127.0.0.1:1080 --output results.json
-  python scholar_scraper.py "John Smith" --debug  # 启用调试模式
         """
     )
     
@@ -364,9 +372,15 @@ async def main():
         help="启用调试模式（保存页面截图和HTML）"
     )
     
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="使用无头模式（不显示浏览器窗口，默认显示窗口）"
+    )
+    
     args = parser.parse_args()
     
-    scraper = ScholarScraper(proxy=args.proxy)
+    scraper = ScholarScraper(proxy=args.proxy, headless=args.headless)
     
     try:
         # 搜索论文
