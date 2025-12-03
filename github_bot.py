@@ -208,57 +208,92 @@ class GitHubBot:
             return 'user'
         
         # 检查页面元素判断类型
-        # 项目页面通常有 "Code"、"Issues"、"Pull requests" 等标签
-        # 用户页面通常有 "Overview" 标签
-        project_indicators = [
-            'nav[role="navigation"] a[data-tab-item="code"]',
-            'nav a[href*="/blob/"]',
-            'nav a[href*="/tree/"]',
-            'div[class*="repository"]',
-            'span[itemprop="name"]',  # 项目名称
-            'a[data-tab-item="code"]',  # Code标签
-            'a[href*="/blob"]',  # 代码链接
-        ]
+        # 使用更精确的检测方法
         
-        user_indicators = [
-            'nav[role="navigation"] a[data-tab-item="overview"]',
-            'div[class*="user-profile"]',
-            'img[alt*="@"]',  # 用户头像
-            'a[data-tab-item="overview"]',  # Overview标签
-            'div[class*="pinned-item"]',  # 用户页面的置顶项目
-        ]
-        
-        # 先检查是否是项目页面
         print("正在检测页面类型...")
-        for selector in project_indicators:
-            try:
-                element = await self.page.query_selector(selector)
-                if element:
-                    print(f"  ✓ 检测到项目页面特征: {selector[:50]}...")
-                    return 'project'
-            except:
-                continue
         
-        # 再检查是否是用户页面
-        for selector in user_indicators:
-            try:
-                element = await self.page.query_selector(selector)
-                if element:
-                    print(f"  ✓ 检测到用户页面特征: {selector[:50]}...")
-                    return 'user'
-            except:
-                continue
+        # 方法1: 检查URL路径结构
+        current_url = self.page.url
+        print(f"  当前URL: {current_url}")
         
-        # 如果都没检测到，检查URL或页面标题
+        # 项目页面的URL格式: https://github.com/username/repo
+        # 用户页面的URL格式: https://github.com/username 或 https://github.com/username?tab=...
+        url_parts = current_url.replace("https://github.com/", "").split("/")
+        if len(url_parts) >= 2 and url_parts[1] and not url_parts[1].startswith("?"):
+            # URL中有两个部分（username/repo），很可能是项目
+            print(f"  ✓ 根据URL结构判断为项目页面 (路径: /{url_parts[0]}/{url_parts[1]})")
+            return 'project'
+        elif len(url_parts) == 1 or (len(url_parts) >= 1 and url_parts[0] and not url_parts[0].startswith("?")):
+            # URL只有一个部分（username），很可能是用户
+            print(f"  ✓ 根据URL结构判断为用户页面 (路径: /{url_parts[0]})")
+            return 'user'
+        
+        # 方法2: 检查页面标题
         try:
             title = await self.page.title()
-            print(f"页面标题: {title}")
-            if "repositories" in title.lower() or "profile" in title.lower():
-                return 'user'
+            print(f"  页面标题: {title}")
+            # 项目页面标题通常包含仓库名，用户页面通常包含 "GitHub" 和用户名
+            if " · GitHub" in title and "/" in input_str:
+                # 如果标题中有斜杠分隔，可能是项目
+                if title.count(" · ") >= 2:
+                    print("  ✓ 根据页面标题判断为项目页面")
+                    return 'project'
         except:
             pass
         
-        # 如果都没检测到，根据URL格式判断
+        # 方法3: 检查特定的页面元素（使用更精确的选择器）
+        # 项目页面特有的元素
+        project_indicators = [
+            'nav[role="navigation"] a[data-tab-item="code"]',  # Code标签
+            'nav[role="navigation"] a[data-tab-item="issues"]',  # Issues标签
+            'nav[role="navigation"] a[data-tab-item="pull-requests"]',  # PR标签
+            'button[data-tab-item="code"]',  # Code按钮
+            'a[href*="/blob/main"]',  # 代码文件链接
+            'a[href*="/tree/main"]',  # 目录树链接
+        ]
+        
+        # 用户页面特有的元素
+        user_indicators = [
+            'nav[role="navigation"] a[data-tab-item="overview"]',  # Overview标签
+            'nav[role="navigation"] a[data-tab-item="repositories"]',  # Repositories标签
+            'div[class*="pinned-item-list"]',  # 置顶项目列表
+            'div[class*="user-profile"]',  # 用户资料区域
+            'div[class*="profile-rollup"]',  # 用户活动汇总
+        ]
+        
+        # 先检查项目页面特征（更具体的选择器）
+        project_score = 0
+        for selector in project_indicators:
+            try:
+                elements = await self.page.query_selector_all(selector)
+                if elements:
+                    project_score += len(elements)
+                    print(f"  找到项目特征: {selector[:50]}... (数量: {len(elements)})")
+            except:
+                continue
+        
+        # 再检查用户页面特征
+        user_score = 0
+        for selector in user_indicators:
+            try:
+                elements = await self.page.query_selector_all(selector)
+                if elements:
+                    user_score += len(elements)
+                    print(f"  找到用户特征: {selector[:50]}... (数量: {len(elements)})")
+            except:
+                continue
+        
+        print(f"  检测得分 - 项目: {project_score}, 用户: {user_score}")
+        
+        # 根据得分判断
+        if project_score > user_score and project_score > 0:
+            print("  ✓ 根据页面元素判断为项目页面")
+            return 'project'
+        elif user_score > project_score and user_score > 0:
+            print("  ✓ 根据页面元素判断为用户页面")
+            return 'user'
+        
+        # 方法4: 如果都没检测到，根据输入格式判断
         print("未检测到明确的页面特征，根据输入格式判断")
         if '/' in input_str:
             return 'project'
