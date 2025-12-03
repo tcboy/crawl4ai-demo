@@ -29,21 +29,33 @@ class GitHubBot:
         self.browser = None
         self.page = None
     
-    async def goto_with_retry(self, url: str, wait_until: str = "networkidle"):
+    async def goto_with_retry(self, url: str, wait_until: str = "load"):
         """
         带重试机制的页面加载方法
         
         Args:
             url: 要访问的URL
-            wait_until: 等待条件，默认为 networkidle
+            wait_until: 等待条件，默认为 load（更快）
         """
-        wait_options = ["networkidle", "load", "domcontentloaded"]
-        start_index = wait_options.index(wait_until) if wait_until in wait_options else 0
+        # 如果当前页面已经是目标URL，直接返回
+        current_url = self.page.url.rstrip('/')
+        target_url = url.rstrip('/')
+        if current_url == target_url:
+            print(f"  页面已在目标URL，跳过加载")
+            return
         
-        # 使用较短的超时时间，快速降级
-        timeouts = [30000, 60000, PAGE_LOAD_TIMEOUT]  # 30秒, 60秒, 120秒
+        # 根据wait_until参数选择等待策略
+        if wait_until == "networkidle":
+            wait_options = ["networkidle", "load", "domcontentloaded"]
+            timeouts = [30000, 60000, PAGE_LOAD_TIMEOUT]  # 30秒, 60秒, 120秒
+        elif wait_until == "load":
+            wait_options = ["load", "domcontentloaded"]
+            timeouts = [60000, PAGE_LOAD_TIMEOUT]  # 60秒, 120秒
+        else:
+            wait_options = [wait_until]
+            timeouts = [PAGE_LOAD_TIMEOUT]
         
-        for i, wait_type in enumerate(wait_options[start_index:]):
+        for i, wait_type in enumerate(wait_options):
             timeout = timeouts[min(i, len(timeouts)-1)]
             try:
                 print(f"  尝试加载页面 (等待条件: {wait_type}, 超时: {timeout/1000}秒)...")
@@ -53,7 +65,10 @@ class GitHubBot:
             except Exception as e:
                 error_msg = str(e)
                 if "timeout" in error_msg.lower():
-                    print(f"  ⚠ {wait_type} 超时，尝试下一个策略...")
+                    if i < len(wait_options) - 1:
+                        print(f"  ⚠ {wait_type} 超时，尝试下一个策略...")
+                    else:
+                        print(f"  ⚠ {wait_type} 超时，尝试使用最短等待...")
                 else:
                     print(f"  ⚠ {wait_type} 失败: {error_msg[:100]}")
                 
@@ -262,7 +277,9 @@ class GitHubBot:
         """
         print(f"\n正在获取用户 {username} 的信息...")
         url = f"https://github.com/{username}"
-        await self.goto_with_retry(url, wait_until="networkidle")
+        print("正在加载用户主页...")
+        await self.goto_with_retry(url, wait_until="load")  # 使用load更快
+        await asyncio.sleep(2)  # 等待页面内容渲染
         
         info = {
             "username": username,
@@ -298,10 +315,11 @@ class GitHubBot:
             print(f"获取粉丝数时出错: {e}")
         
         # 获取项目列表
+        print("正在获取项目列表...")
         try:
             # 访问用户的仓库页面
             repos_url = f"https://github.com/{username}?tab=repositories"
-            await self.goto_with_retry(repos_url, wait_until="networkidle")
+            await self.goto_with_retry(repos_url, wait_until="load")  # 使用load更快
             await asyncio.sleep(2)  # 等待页面完全加载
             
             # 等待仓库列表加载，尝试多种选择器
@@ -369,10 +387,12 @@ class GitHubBot:
             print(f"获取项目列表时出错: {e}")
         
         # 获取最近的提交记录
+        print("正在获取最近的提交记录...")
         try:
             # 访问用户的贡献页面或活动页面
             activity_url = f"https://github.com/{username}"
-            await self.goto_with_retry(activity_url, wait_until="networkidle")
+            await self.goto_with_retry(activity_url, wait_until="load")  # 使用load更快
+            await asyncio.sleep(2)  # 等待页面内容渲染
             
             # 尝试获取活动feed中的提交记录
             commit_elements = await self.page.query_selector_all('div[class*="TimelineItem"]')
@@ -407,7 +427,9 @@ class GitHubBot:
         """
         print(f"\n正在获取项目 {project_name} 的信息...")
         url = f"https://github.com/{project_name}"
-        await self.goto_with_retry(url, wait_until="networkidle")
+        print("正在加载项目主页...")
+        await self.goto_with_retry(url, wait_until="load")  # 使用load而不是networkidle，更快
+        await asyncio.sleep(2)  # 等待页面内容渲染
         
         info = {
             "project": project_name,
@@ -418,6 +440,7 @@ class GitHubBot:
         }
         
         # 获取Star数
+        print("正在获取Star数...")
         try:
             # 尝试多种选择器
             star_selectors = [
@@ -435,17 +458,16 @@ class GitHubBot:
                         star_match = re.search(r'(\d+(?:\.\d+)?[KMB]?)', star_text)
                         if star_match:
                             info["stars"] = star_match.group(1)
+                            print(f"  ✓ Star数: {info['stars']}")
                             break
                 except:
                     continue
         except Exception as e:
             print(f"获取Star数时出错: {e}")
         
-        # 获取README内容
+        # 获取README内容（已经在项目主页，不需要重新加载）
+        print("正在获取README内容...")
         try:
-            # 先访问项目主页
-            await self.goto_with_retry(url, wait_until="networkidle")
-            await asyncio.sleep(2)
             
             # 尝试多种README选择器
             readme_selectors = [
@@ -473,9 +495,10 @@ class GitHubBot:
             print(f"获取README时出错: {e}")
         
         # 获取最近的提交记录
+        print("正在获取最近的提交记录...")
         try:
             commits_url = f"https://github.com/{project_name}/commits"
-            await self.goto_with_retry(commits_url, wait_until="networkidle")
+            await self.goto_with_retry(commits_url, wait_until="load")  # 使用load更快
             await asyncio.sleep(2)
             
             # 等待提交列表加载，尝试多种选择器
@@ -534,9 +557,10 @@ class GitHubBot:
             print(f"获取提交记录时出错: {e}")
         
         # 获取贡献者列表
+        print("正在获取贡献者列表...")
         try:
             contributors_url = f"https://github.com/{project_name}/graphs/contributors"
-            await self.goto_with_retry(contributors_url, wait_until="networkidle")
+            await self.goto_with_retry(contributors_url, wait_until="load")  # 使用load更快
             
             await asyncio.sleep(2)
             
