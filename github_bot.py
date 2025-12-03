@@ -84,12 +84,44 @@ class GitHubBot:
         print("="*60)
         input()
         
-        # 验证是否已登录（检查是否有用户头像或用户名）
-        try:
-            await self.page.wait_for_selector('img[alt*="@"], [data-test-selector="user-nav"]', timeout=SELECTOR_TIMEOUT)
-            print("✓ 检测到已登录状态")
-        except:
-            print("⚠ 警告: 可能未检测到登录状态，继续执行...")
+        # 刷新页面以确保获取最新状态
+        print("正在刷新页面以检测登录状态...")
+        await self.page.reload(wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT)
+        await asyncio.sleep(2)
+        
+        # 验证是否已登录（使用多种选择器检查）
+        login_indicators = [
+            'img[alt*="@"]',  # 用户头像
+            '[data-test-selector="user-nav"]',  # 用户导航
+            'summary[aria-label*="profile"]',  # 用户菜单
+            'button[aria-label*="profile"]',  # 用户按钮
+            'a[href*="/settings"]',  # 设置链接
+            'nav[aria-label="User account"]',  # 用户账户导航
+            'details[data-view-component="true"] summary[aria-label*="View profile"]',  # GitHub新界面
+            'button[aria-label*="View profile"]',  # 查看资料按钮
+        ]
+        
+        logged_in = False
+        for selector in login_indicators:
+            try:
+                element = await self.page.query_selector(selector)
+                if element:
+                    print(f"✓ 检测到已登录状态 (通过选择器: {selector[:50]}...)")
+                    logged_in = True
+                    break
+            except:
+                continue
+        
+        # 如果没找到，尝试检查URL是否跳转到主页（登录后通常会跳转）
+        if not logged_in:
+            current_url = self.page.url
+            if "github.com" in current_url and "/login" not in current_url:
+                print("✓ 检测到已离开登录页面，假设已登录")
+                logged_in = True
+        
+        if not logged_in:
+            print("⚠ 警告: 可能未检测到登录状态，但将继续执行...")
+            print("   如果后续操作失败，请确保已正确登录")
     
     async def detect_type(self, input_str: str) -> str:
         """
@@ -101,17 +133,27 @@ class GitHubBot:
         Returns:
             'user' 或 'project'
         """
+        print(f"正在访问: https://github.com/{input_str}")
+        
         # 如果包含斜杠，可能是项目名（格式：username/repo）
         if '/' in input_str and input_str.count('/') == 1:
             # 验证是否是有效的项目格式
             parts = input_str.split('/')
             if len(parts) == 2 and parts[0] and parts[1]:
+                print("根据格式判断为项目（包含斜杠）")
                 return 'project'
         
         # 访问URL判断
         url = f"https://github.com/{input_str}"
-        await self.goto_with_retry(url, wait_until="networkidle")
-        await asyncio.sleep(1)
+        try:
+            await self.goto_with_retry(url, wait_until="networkidle")
+            await asyncio.sleep(2)  # 等待页面完全加载
+        except Exception as e:
+            print(f"访问页面时出错: {e}，将尝试根据URL格式判断")
+            # 如果访问失败，根据格式判断
+            if '/' in input_str:
+                return 'project'
+            return 'user'
         
         # 检查页面元素判断类型
         # 项目页面通常有 "Code"、"Issues"、"Pull requests" 等标签
@@ -122,19 +164,23 @@ class GitHubBot:
             'nav a[href*="/tree/"]',
             'div[class*="repository"]',
             'span[itemprop="name"]',  # 项目名称
+            'a[data-tab-item="code"]',  # Code标签
         ]
         
         user_indicators = [
             'nav[role="navigation"] a[data-tab-item="overview"]',
             'div[class*="user-profile"]',
             'img[alt*="@"]',  # 用户头像
+            'a[data-tab-item="overview"]',  # Overview标签
         ]
         
         # 先检查是否是项目页面
+        print("正在检测页面类型...")
         for selector in project_indicators:
             try:
                 element = await self.page.query_selector(selector)
                 if element:
+                    print("检测到项目页面特征")
                     return 'project'
             except:
                 continue
@@ -144,10 +190,15 @@ class GitHubBot:
             try:
                 element = await self.page.query_selector(selector)
                 if element:
+                    print("检测到用户页面特征")
                     return 'user'
             except:
                 continue
         
+        # 如果都没检测到，根据URL格式判断
+        print("未检测到明确的页面特征，根据输入格式判断")
+        if '/' in input_str:
+            return 'project'
         # 默认尝试作为用户处理
         return 'user'
     
@@ -527,25 +578,44 @@ async def main():
     
     try:
         # 启动浏览器并等待登录
+        print("="*60)
+        print("步骤 1/4: 启动浏览器并等待登录")
+        print("="*60)
         await bot.start_browser()
+        print("✓ 浏览器启动完成，登录检测完成\n")
         
         # 检测输入类型
+        print("="*60)
+        print("步骤 2/4: 检测输入类型")
+        print("="*60)
+        print(f"正在分析输入: {args.input}")
         input_type = await bot.detect_type(args.input)
-        print(f"\n检测到输入类型: {input_type}")
+        print(f"✓ 检测到输入类型: {input_type}\n")
         
         # 根据类型获取信息
+        print("="*60)
+        print(f"步骤 3/4: 获取{'用户' if input_type == 'user' else '项目'}信息")
+        print("="*60)
         if input_type == 'user':
             info = await bot.get_user_info(args.input)
             bot.print_user_info(info)
         else:
             info = await bot.get_project_info(args.input)
             bot.print_project_info(info)
+        print("\n✓ 信息获取完成\n")
         
         # 如果指定了输出文件，保存JSON
         if args.output:
+            print("="*60)
+            print("步骤 4/4: 保存结果")
+            print("="*60)
             with open(args.output, 'w', encoding='utf-8') as f:
                 json.dump(info, f, ensure_ascii=False, indent=2)
-            print(f"\n结果已保存到: {args.output}")
+            print(f"✓ 结果已保存到: {args.output}\n")
+        
+        print("="*60)
+        print("所有任务完成！")
+        print("="*60)
         
     except KeyboardInterrupt:
         print("\n\n程序被用户中断")
@@ -554,8 +624,9 @@ async def main():
         import traceback
         traceback.print_exc()
     finally:
+        print("\n正在关闭浏览器...")
         await bot.close()
-        print("\n浏览器已关闭")
+        print("浏览器已关闭")
 
 
 if __name__ == "__main__":
