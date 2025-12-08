@@ -1,0 +1,10 @@
+# CUA 框架核心包
+cua-agent[all]>=0.1.0
+cua-computer>=0.1.0
+
+# 环境变量管理
+python-dotenv>=1.0.0
+
+# 可选：如果需要使用其他功能
+# cua-core>=0.1.0
+# cua-som>=0.1.0
