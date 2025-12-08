@@ -8,9 +8,27 @@ CUA (Computer-Use Agents) 是一个开源框架，用于构建能够通过视觉
 
 ## 快速开始
 
-### 1. 安装依赖
+### 0. 检查 Python 版本
 
-首先，确保你使用的是 Python 3.12 或 3.13（Python 3.14 目前不支持）。
+CUA 框架需要 **Python 3.12 或 3.13**（Python 3.14 目前不支持）。
+
+```bash
+# 检查当前 Python 版本
+python3 --version
+
+# 运行环境检查脚本（推荐）
+python3 check_python_version.py
+```
+
+如果你的 Python 版本是 3.11 或更早，需要升级：
+
+- **Ubuntu/Debian**: 运行 `bash upgrade_python.sh` 或查看 `PYTHON_UPGRADE_GUIDE.md`
+- **macOS**: 使用 `brew install python@3.12` 或 `pyenv`
+- **Windows**: 从 [Python 官网](https://www.python.org/downloads/) 下载安装程序
+
+详细升级指南请查看 [PYTHON_UPGRADE_GUIDE.md](./PYTHON_UPGRADE_GUIDE.md)
+
+### 1. 安装依赖
 
 ```bash
 # 安装 Agent SDK
@@ -47,6 +65,9 @@ python simple_agent.py
 - `advanced_agent.py` - 更高级的 agent 示例，包含多个任务
 - `computer_example.py` - 直接使用 Computer SDK 的示例
 - `requirements.txt` - Python 依赖列表
+- `check_python_version.py` - Python 版本和环境检查脚本
+- `upgrade_python.sh` - Ubuntu/Debian 系统 Python 升级脚本
+- `PYTHON_UPGRADE_GUIDE.md` - 详细的 Python 升级指南
 
 ## 支持的模型
 
